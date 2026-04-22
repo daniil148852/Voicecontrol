@@ -14,18 +14,12 @@
 
 #include <Geode/Geode.hpp>
 
-#include <android/log.h>
 #include <cmath>
-#include <jni.h>
 #include <string>
 
 #include "libs/miniaudio.h"
 
 using namespace geode::prelude;
-
-// ------------------------------------------------------------------ JVM pointer (global scope)
-// Defined in main.cpp at global scope, accessible here.
-extern JavaVM* g_voicecontrol_jvm;
 
 namespace voicecontrol {
 
@@ -51,87 +45,17 @@ namespace voicecontrol {
         stop();
     }
 
-    // ------------------------------------------------------------------ JNI helpers
-
-    static JNIEnv* getJNIEnvSafe() {
-        JNIEnv* env = nullptr;
-        if (!g_voicecontrol_jvm) return nullptr;
-        jint res = g_voicecontrol_jvm->GetEnv(
-            reinterpret_cast<void**>(&env), JNI_VERSION_1_6
-        );
-        if (res == JNI_EDETACHED) {
-            if (g_voicecontrol_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK)
-                return nullptr;
-        }
-        return env;
-    }
-
-    static void clearJavaException(JNIEnv* env) {
-        if (!env) return;
-        if (env->ExceptionCheck()) {
-            env->ExceptionDescribe();
-            env->ExceptionClear();
-        }
-    }
-
-    // ------------------------------------------------------------------ permission
-
-    bool AudioCapture::checkPermission() const {
-        JNIEnv* env = getJNIEnvSafe();
-        if (!env) {
-            log::warn("VoiceControl: JNI unavailable — assuming permission denied.");
-            return false;
-        }
-
-        jclass actClass = env->FindClass("android/app/ActivityThread");
-        if (!actClass) { clearJavaException(env); return false; }
-
-        jmethodID curApp = env->GetStaticMethodID(
-            actClass, "currentApplication", "()Landroid/app/Application;"
-        );
-        if (!curApp) { clearJavaException(env); env->DeleteLocalRef(actClass); return false; }
-
-        jobject app = env->CallStaticObjectMethod(actClass, curApp);
-        clearJavaException(env);
-        env->DeleteLocalRef(actClass);
-        if (!app) return false;
-
-        jclass ctxClass = env->GetObjectClass(app);
-        jmethodID csp = env->GetMethodID(
-            ctxClass, "checkSelfPermission", "(Ljava/lang/String;)I"
-        );
-        if (!csp) {
-            // Pre-Android 6 — permission always granted at install time.
-            clearJavaException(env);
-            env->DeleteLocalRef(ctxClass);
-            env->DeleteLocalRef(app);
-            return true;
-        }
-
-        jstring perm = env->NewStringUTF("android.permission.RECORD_AUDIO");
-        jint result  = env->CallIntMethod(app, csp, perm);
-        clearJavaException(env);
-
-        env->DeleteLocalRef(perm);
-        env->DeleteLocalRef(ctxClass);
-        env->DeleteLocalRef(app);
-
-        return result == 0; // PERMISSION_GRANTED == 0
-    }
-
     void AudioCapture::showPermissionWarning() {
         log::warn(
-            "VoiceControl: microphone permission not granted. "
-            "Grant via: adb shell pm grant com.robtopx.geometryjump "
-            "android.permission.RECORD_AUDIO"
+            "VoiceControl: Could not initialize audio. "
+            "If microphone permission is missing, grant via: "
+            "adb shell pm grant com.robtopx.geometryjump android.permission.RECORD_AUDIO"
         );
         Notification::create(
-            "VoiceControl: mic permission missing — see mod description",
+            "VoiceControl: mic init failed — check permission",
             NotificationIcon::Warning
         )->show();
     }
-
-    // ------------------------------------------------------------------ miniaudio callback
 
     void AudioCapture::dataCallback(
         ma_device*  pDevice,
@@ -174,21 +98,9 @@ namespace voicecontrol {
         g_currentRMS.store(rms, std::memory_order_relaxed);
     }
 
-    // ------------------------------------------------------------------ init / start / stop
-
     bool AudioCapture::init() {
         if (!m_impl || m_impl->permanentlyDisabled) return false;
         if (m_impl->contextInitialized && m_impl->deviceInitialized) return true;
-
-        if (!checkPermission()) {
-            if (!m_impl->permissionWarned) {
-                m_impl->permissionWarned = true;
-                showPermissionWarning();
-            }
-            m_impl->permanentlyDisabled = true;
-            g_audioAvailable.store(false, std::memory_order_relaxed);
-            return false;
-        }
 
         // Backend priority list: AAudio first (Android 8+), OpenSL ES fallback.
         ma_backend backends[] = { ma_backend_aaudio, ma_backend_opensl };
@@ -198,6 +110,12 @@ namespace voicecontrol {
         );
         if (result != MA_SUCCESS) {
             log::error("VoiceControl: ma_context_init failed ({})", static_cast<int>(result));
+            
+            if (!m_impl->permissionWarned) {
+                m_impl->permissionWarned = true;
+                showPermissionWarning();
+            }
+            
             m_impl->permanentlyDisabled = true;
             g_audioAvailable.store(false, std::memory_order_relaxed);
             return false;
@@ -214,6 +132,7 @@ namespace voicecontrol {
         result = ma_device_init(&m_impl->context, &cfg, &m_impl->device);
         if (result != MA_SUCCESS) {
             log::error("VoiceControl: ma_device_init failed ({})", static_cast<int>(result));
+            
             if (!m_impl->deviceWarned) {
                 m_impl->deviceWarned = true;
                 Notification::create(
@@ -221,6 +140,7 @@ namespace voicecontrol {
                     NotificationIcon::Error
                 )->show();
             }
+            
             ma_context_uninit(&m_impl->context);
             m_impl->contextInitialized  = false;
             m_impl->permanentlyDisabled = true;
@@ -231,7 +151,7 @@ namespace voicecontrol {
 
         g_currentRMS.store(0.0f, std::memory_order_relaxed);
         g_audioAvailable.store(true, std::memory_order_relaxed);
-        log::info("VoiceControl: microphone initialised successfully.");
+        log::info("VoiceControl: microphone initialized successfully.");
         return true;
     }
 
