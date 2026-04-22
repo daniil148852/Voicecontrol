@@ -1,394 +1,57 @@
-name: Android Build and Release
+name: Build Geode Mod
 
 on:
+  workflow_dispatch:
   push:
     branches:
-      - main
-      - master
-    tags:
-      - "v*"
-  pull_request:
-  workflow_dispatch:
-
-permissions:
-  contents: write
+      - "**"
 
 jobs:
   build:
-    name: Build Android ${{ matrix.abi }}
-    runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
-        abi:
-          - arm64-v8a
-          - armeabi-v7a
+        config:
+        - name: Windows
+          os: windows-latest
+
+        - name: macOS
+          os: macos-latest
+
+        - name: iOS
+          os: macos-latest
+          target: iOS
+
+        - name: Android32
+          os: ubuntu-latest
+          target: Android32
+
+        - name: Android64
+          os: ubuntu-latest
+          target: Android64
+
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Build the mod
+        uses: geode-sdk/build-geode-mod@main
         with:
-          submodules: recursive
-          fetch-depth: 0
+          combine: true
+          target: ${{ matrix.config.target }}
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          mkdir -p "$ANDROID_SDK_ROOT/licenses"
-          printf '\n8933bad161af4178b1185d1a37fbf41ea5269c55' \
-            > "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
-          printf '\n84831b9409646a918e30573bab4c9c91346d8abd' \
-            > "$ANDROID_SDK_ROOT/licenses/android-sdk-preview-license"
-          printf '\nd975f751698a77b662f1254ddbeed3901e976f5a' \
-            > "$ANDROID_SDK_ROOT/licenses/intel-android-extra-license"
-          echo "Licenses written."
-
-      - name: Install base Android SDK packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdkmanager "platform-tools" "platforms;android-23"
-
-      - name: Install Android NDK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          NDK_PKG=""
-
-          for candidate in \
-            "ndk;29.0.14206865" \
-            "ndk;29.0.13113456" \
-            "ndk;28.0.13004108" \
-            "ndk;28.0.12674087" \
-            "ndk;27.2.12479018"
-          do
-            echo "Trying NDK package: $candidate"
-            if sdkmanager "$candidate" 2>&1; then
-              NDK_PKG="$candidate"
-              echo "Successfully installed: $NDK_PKG"
-              break
-            else
-              echo "Package not available: $candidate"
-            fi
-          done
-
-          if [ -z "$NDK_PKG" ]; then
-            echo "ERROR: Failed to install any NDK package."
-            exit 1
-          fi
-
-          NDK_ROOT="$(ls -d "$ANDROID_SDK_ROOT"/ndk/* 2>/dev/null | sort -V | tail -n 1)"
-
-          if [ -z "$NDK_ROOT" ] || [ ! -d "$NDK_ROOT" ]; then
-            echo "ERROR: Could not locate NDK directory."
-            exit 1
-          fi
-
-          echo "NDK_ROOT=$NDK_ROOT" >> "$GITHUB_ENV"
-          echo "Using NDK at: $NDK_ROOT"
-
-      - name: Verify Clang version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          CLANGXX="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
-
-          if [ ! -x "$CLANGXX" ]; then
-            echo "ERROR: clang++ not found at $CLANGXX"
-            exit 1
-          fi
-
-          "$CLANGXX" --version
-
-          CLANG_MAJOR="$(
-            "$CLANGXX" --version \
-              | head -n 1 \
-              | sed -E 's/.*version ([0-9]+)\..*/\1/'
-          )"
-
-          echo "Detected Clang major version: $CLANG_MAJOR"
-
-          if [ -z "$CLANG_MAJOR" ]; then
-            echo "ERROR: Could not parse Clang version."
-            exit 1
-          fi
-
-          if [ "$CLANG_MAJOR" -lt 19 ]; then
-            echo "ERROR: Clang $CLANG_MAJOR is too old. Geode requires Clang 19+."
-            exit 1
-          fi
-
-          echo "Clang version OK: $CLANG_MAJOR"
-
-      - name: Download Geode SDK if missing
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -d "geode" ] && [ -f "geode/CMakeLists.txt" ]; then
-            echo "Geode SDK already present at ./geode"
-          else
-            echo "Downloading Geode SDK source..."
-            rm -rf /tmp/geode-sdk.zip /tmp/geode-sdk-tmp
-
-            curl -fsSL --retry 3 \
-              "https://github.com/geode-sdk/geode/archive/refs/heads/main.zip" \
-              -o /tmp/geode-sdk.zip
-
-            unzip -q /tmp/geode-sdk.zip -d /tmp/geode-sdk-tmp
-            mv /tmp/geode-sdk-tmp/geode-main geode
-
-            echo "Geode SDK source extracted."
-          fi
-
-          GEODE_SDK="$(pwd)/geode"
-          echo "GEODE_SDK=$GEODE_SDK" >> "$GITHUB_ENV"
-          echo "Geode SDK path: $GEODE_SDK"
-
-      - name: Download Geode loader binaries from GitHub releases
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Read the Geode SDK version from the VERSION file that ships with it.
-          GEODE_VERSION="$(cat geode/VERSION | tr -d '[:space:]')"
-          if [ -z "$GEODE_VERSION" ]; then
-            echo "ERROR: Could not read Geode version from geode/VERSION"
-            exit 1
-          fi
-          echo "Geode SDK version: $GEODE_VERSION"
-
-          # The Geode GitHub releases ship a Geode.zip containing the
-          # pre-built loader binaries for all platforms including Android.
-          RELEASE_URL="https://github.com/geode-sdk/geode/releases/download/v${GEODE_VERSION}/geode-v${GEODE_VERSION}-android64.zip"
-          RELEASE_URL_ALT="https://github.com/geode-sdk/geode/releases/download/v${GEODE_VERSION}/Geode.zip"
-
-          mkdir -p /tmp/geode-bins
-
-          echo "Trying Android64 binary package: $RELEASE_URL"
-          if curl -fsSL --retry 3 "$RELEASE_URL" -o /tmp/geode-bins/android64.zip 2>/dev/null; then
-            echo "Downloaded android64 package."
-            unzip -q /tmp/geode-bins/android64.zip -d /tmp/geode-bins/android64
-            echo "Contents:"
-            find /tmp/geode-bins/android64 -type f | head -40
-          else
-            echo "Android64 specific package not found, trying generic Geode.zip..."
-            if curl -fsSL --retry 3 "$RELEASE_URL_ALT" -o /tmp/geode-bins/Geode.zip 2>/dev/null; then
-              echo "Downloaded generic Geode.zip."
-              unzip -q /tmp/geode-bins/Geode.zip -d /tmp/geode-bins/generic
-              echo "Contents:"
-              find /tmp/geode-bins/generic -type f | head -40
-            else
-              echo "WARNING: Could not download pre-built Geode binaries."
-              echo "Will attempt to find binaries from the release API..."
-            fi
-          fi
-
-          # Discover what the Geode SDK CMake actually expects to find.
-          # It looks for binaries in geode/bin/<platform>/ directories.
-          # We find any .so files we downloaded and place them there.
-
-          mkdir -p "$GEODE_SDK/bin/Android64"
-          mkdir -p "$GEODE_SDK/bin/Android32"
-
-          # Find any .so files in the downloaded packages and copy them.
-          FOUND=0
-          while IFS= read -r -d '' sofile; do
-            fname="$(basename "$sofile")"
-            echo "Found binary: $sofile -> copying to geode/bin/Android64/$fname"
-            cp "$sofile" "$GEODE_SDK/bin/Android64/$fname"
-            FOUND=$((FOUND + 1))
-          done < <(find /tmp/geode-bins -type f -name "*.so" -print0 2>/dev/null || true)
-
-          if [ "$FOUND" -eq 0 ]; then
-            echo "No .so binaries found in downloaded packages."
-            echo "Fetching release asset list from GitHub API..."
-
-            ASSETS_JSON="$(
-              curl -fsSL \
-                "https://api.github.com/repos/geode-sdk/geode/releases/tags/v${GEODE_VERSION}" \
-                2>/dev/null || \
-              curl -fsSL \
-                "https://api.github.com/repos/geode-sdk/geode/releases/latest" \
-                2>/dev/null
-            )"
-
-            echo "Available release assets:"
-            echo "$ASSETS_JSON" \
-              | grep -oE '"browser_download_url": "[^"]+"' \
-              | grep -oE 'https://[^"]+' \
-              || true
-
-            # Try to download each asset that looks Android-related.
-            while IFS= read -r asset_url; do
-              fname="$(basename "$asset_url")"
-              echo "Downloading asset: $asset_url"
-              if curl -fsSL --retry 3 "$asset_url" -o "/tmp/geode-bins/$fname" 2>/dev/null; then
-                case "$fname" in
-                  *.zip)
-                    unzip -q "/tmp/geode-bins/$fname" \
-                      -d "/tmp/geode-bins/asset-${fname%.zip}" || true
-                    ;;
-                esac
-              fi
-            done < <(
-              echo "$ASSETS_JSON" \
-                | grep -oE '"browser_download_url": "[^"]+"' \
-                | grep -oE 'https://[^"]+' \
-                | grep -iE 'android|arm' \
-                || true
-            )
-
-            # Try again after downloading more assets.
-            while IFS= read -r -d '' sofile; do
-              fname="$(basename "$sofile")"
-              echo "Found binary: $sofile"
-              cp "$sofile" "$GEODE_SDK/bin/Android64/$fname"
-              FOUND=$((FOUND + 1))
-            done < <(find /tmp/geode-bins -type f -name "*.so" -print0 2>/dev/null || true)
-          fi
-
-          echo "--- Final contents of geode/bin/ ---"
-          find "$GEODE_SDK/bin" -type f | sort || true
-
-          # The SDK CMake checks for libGeode.so specifically.
-          # If we could not find it, create a stub so CMake can at least link.
-          # The mod itself does not call into libGeode.so directly at compile
-          # time — it is resolved at runtime on the device.
-          if [ ! -f "$GEODE_SDK/bin/Android64/libGeode.so" ]; then
-            echo "libGeode.so not found in downloaded release assets."
-            echo "Creating a stub libGeode.so for linking purposes..."
-
-            CLANGXX="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
-            SYSROOT="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-
-            cat > /tmp/stub_geode.cpp << 'STUBEOF'
-          // Stub libGeode.so — satisfied at runtime by the real Geode loader.
-          // This file only exists so the mod .so can link against -lGeode
-          // during the CI build without requiring the actual loader binary.
-          extern "C" __attribute__((visibility("default"))) void geode_noop() {}
-          STUBEOF
-
-            "$CLANGXX" \
-              --target=aarch64-linux-android23 \
-              --sysroot="$SYSROOT" \
-              -shared \
-              -fPIC \
-              -o "$GEODE_SDK/bin/Android64/libGeode.so" \
-              /tmp/stub_geode.cpp
-
-            echo "Stub libGeode.so created:"
-            ls -lah "$GEODE_SDK/bin/Android64/libGeode.so"
-          fi
-
-          # Also provide the same stub for Android32 (armeabi-v7a).
-          if [ ! -f "$GEODE_SDK/bin/Android32/libGeode.so" ]; then
-            CLANGXX="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
-            SYSROOT="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-
-            "$CLANGXX" \
-              --target=armv7a-linux-androideabi23 \
-              --sysroot="$SYSROOT" \
-              -shared \
-              -fPIC \
-              -o "$GEODE_SDK/bin/Android32/libGeode.so" \
-              /tmp/stub_geode.cpp
-
-            echo "Stub libGeode.so (32-bit) created:"
-            ls -lah "$GEODE_SDK/bin/Android32/libGeode.so"
-          fi
-
-      - name: Ensure miniaudio header exists
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p src/libs
-
-          if [ ! -f src/libs/miniaudio.h ]; then
-            echo "Downloading miniaudio.h..."
-            curl -fsSL --retry 3 \
-              "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h" \
-              -o src/libs/miniaudio.h
-          else
-            echo "miniaudio.h already present."
-          fi
-
-          ls -lah src/libs/miniaudio.h
-
-      - name: Configure CMake
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Configuring for ABI : ${{ matrix.abi }}"
-          echo "NDK path            : $NDK_ROOT"
-          echo "Geode SDK path      : $GEODE_SDK"
-
-          cmake -S . -B "build/${{ matrix.abi }}" -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DANDROID_ABI="${{ matrix.abi }}" \
-            -DANDROID_PLATFORM=android-23 \
-            -DANDROID_STL=c++_shared \
-            -DGEODE_SDK="$GEODE_SDK" \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake"
-
-      - name: Build
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake --build "build/${{ matrix.abi }}" \
-            --config Release \
-            --parallel "$(nproc)"
-
-      - name: Collect artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p "artifacts/${{ matrix.abi }}"
-
-          find "build/${{ matrix.abi }}" -type f \
-            \( -name "*.geode" -o -name "*.so" \) \
-            -exec cp -v {} "artifacts/${{ matrix.abi }}/" \;
-
-          echo "Artifacts for ${{ matrix.abi }}:"
-          ls -lah "artifacts/${{ matrix.abi }}/"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: voicecontrol-${{ matrix.abi }}
-          path: artifacts/${{ matrix.abi }}/*
-          if-no-files-found: error
-
-  release:
-    name: Create GitHub Release
+  package:
+    name: Package builds
     runs-on: ubuntu-latest
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: ['build']
 
     steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: voicecontrol-*
-          path: release-artifacts
-          merge-multiple: true
+      - uses: geode-sdk/build-geode-mod/combine@main
+        id: build
 
-      - name: Show release files
-        shell: bash
-        run: |
-          find release-artifacts -type f -print
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: release-artifacts/**
-          generate_release_notes: true
+          name: Build Output
+          path: ${{ steps.build.outputs.build-output }}
