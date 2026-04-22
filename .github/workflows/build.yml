@@ -13,6 +13,9 @@ on:
 permissions:
   contents: write
 
+env:
+  GEODE_SDK_URL: "https://github.com/geode-sdk/geode/archive/refs/heads/main.zip"
+
 jobs:
   build:
     name: Build Android ${{ matrix.abi }}
@@ -36,6 +39,22 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
+
+      - name: Install Ninja
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build unzip
+
+      - name: Download and extract Geode SDK
+        shell: bash
+        run: |
+          echo "Downloading Geode SDK from $GEODE_SDK_URL ..."
+          curl -L --retry 3 -o /tmp/geode-sdk.zip "$GEODE_SDK_URL"
+          unzip -q /tmp/geode-sdk.zip -d /tmp/geode-sdk-tmp
+          mv /tmp/geode-sdk-tmp/geode-main geode
+          echo "Geode SDK extracted to $(pwd)/geode"
+          ls -la geode/
 
       - name: Ensure miniaudio header exists
         shell: bash
