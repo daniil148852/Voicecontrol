@@ -73,7 +73,7 @@ jobs:
           cmake -S . -B build/${{ matrix.abi }} -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DANDROID_ABI=${{ matrix.abi }} \
-            -DANDROID_PLATFORM=android-21 \
+            -DANDROID_PLATFORM=android-23 \
             -DANDROID_STL=c++_shared \
             -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup_ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake
 
