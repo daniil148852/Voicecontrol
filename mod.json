@@ -1,5 +1,5 @@
 {
-  "geode": "4.0.0",
+  "geode": "1.8.0",
   "gd": { "android": "2.2081" },
   "id": "authorname.voicecontrol",
   "name": "VoiceControl",
