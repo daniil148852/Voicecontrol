@@ -30,7 +30,6 @@ namespace voicecontrol {
         struct Impl;
         std::unique_ptr<Impl> m_impl;
 
-        bool checkPermission() const;
         static void showPermissionWarning();
         static void dataCallback(
             ma_device*  pDevice,
