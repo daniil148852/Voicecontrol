@@ -23,10 +23,14 @@
 
 using namespace geode::prelude;
 
+// ------------------------------------------------------------------ JVM pointer (global scope)
+// Defined in main.cpp at global scope, accessible here.
+extern JavaVM* g_voicecontrol_jvm;
+
 namespace voicecontrol {
 
     std::atomic<float> g_currentRMS     { 0.0f  };
-    std::atomic<bool>  g_audioAvailable { false  };
+    std::atomic<bool>  g_audioAvailable { false };
 
     struct AudioCapture::Impl {
         ma_context context {};
@@ -51,9 +55,6 @@ namespace voicecontrol {
 
     static JNIEnv* getJNIEnvSafe() {
         JNIEnv* env = nullptr;
-        // Access the JavaVM through the raw JNI interface — no Cocos2d helper needed.
-        // The JVM pointer is available globally after JNI_OnLoad runs.
-        extern JavaVM* g_voicecontrol_jvm;
         if (!g_voicecontrol_jvm) return nullptr;
         jint res = g_voicecontrol_jvm->GetEnv(
             reinterpret_cast<void**>(&env), JNI_VERSION_1_6
