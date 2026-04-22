@@ -38,9 +38,6 @@ jobs:
       - name: Accept Android SDK licenses
         shell: bash
         run: |
-          # Do NOT use set -euo pipefail here.
-          # yes dying from SIGPIPE when sdkmanager stops reading
-          # is normal and must not be treated as an error.
           mkdir -p "$ANDROID_SDK_ROOT/licenses"
           printf '\n8933bad161af4178b1185d1a37fbf41ea5269c55' \
             > "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
@@ -71,6 +68,7 @@ jobs:
           NDK_PKG=""
 
           for candidate in \
+            "ndk;29.0.14206865" \
             "ndk;29.0.13113456" \
             "ndk;28.0.13004108" \
             "ndk;28.0.12674087" \
@@ -87,14 +85,14 @@ jobs:
           done
 
           if [ -z "$NDK_PKG" ]; then
-            echo "ERROR: Failed to install any NDK package from the candidate list."
+            echo "ERROR: Failed to install any NDK package."
             exit 1
           fi
 
           NDK_ROOT="$(ls -d "$ANDROID_SDK_ROOT"/ndk/* 2>/dev/null | sort -V | tail -n 1)"
 
           if [ -z "$NDK_ROOT" ] || [ ! -d "$NDK_ROOT" ]; then
-            echo "ERROR: Could not locate NDK directory under $ANDROID_SDK_ROOT/ndk/"
+            echo "ERROR: Could not locate NDK directory."
             exit 1
           fi
 
@@ -124,17 +122,51 @@ jobs:
           echo "Detected Clang major version: $CLANG_MAJOR"
 
           if [ -z "$CLANG_MAJOR" ]; then
-            echo "ERROR: Could not parse Clang version string."
+            echo "ERROR: Could not parse Clang version."
             exit 1
           fi
 
           if [ "$CLANG_MAJOR" -lt 19 ]; then
-            echo "ERROR: Clang $CLANG_MAJOR is too old. Geode requires Clang 19 or newer."
-            echo "Try a newer NDK package."
+            echo "ERROR: Clang $CLANG_MAJOR is too old. Geode requires Clang 19+."
             exit 1
           fi
 
           echo "Clang version OK: $CLANG_MAJOR"
+
+      - name: Install Geode CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Fetching latest Geode CLI release info..."
+
+          CLI_URL="$(
+            curl -fsSL https://api.github.com/repos/geode-sdk/cli/releases/latest \
+              | grep -oE '"browser_download_url": "[^"]+-linux\.zip"' \
+              | grep -oE 'https://[^"]+' \
+              | head -n 1
+          )"
+
+          if [ -z "$CLI_URL" ]; then
+            echo "ERROR: Could not determine Geode CLI download URL."
+            exit 1
+          fi
+
+          echo "Downloading Geode CLI from: $CLI_URL"
+          curl -fsSL --retry 3 "$CLI_URL" -o /tmp/geode-cli.zip
+          unzip -q /tmp/geode-cli.zip -d /tmp/geode-cli
+
+          CLI_BIN="$(find /tmp/geode-cli -type f -name 'geode' | head -n 1)"
+          if [ -z "$CLI_BIN" ]; then
+            echo "ERROR: geode binary not found after extracting CLI."
+            exit 1
+          fi
+
+          chmod +x "$CLI_BIN"
+          sudo mv "$CLI_BIN" /usr/local/bin/geode
+
+          geode --version
+          echo "Geode CLI installed."
 
       - name: Download Geode SDK if missing
         shell: bash
@@ -146,10 +178,10 @@ jobs:
             exit 0
           fi
 
-          echo "Geode SDK not found. Downloading..."
+          echo "Downloading Geode SDK..."
           rm -rf /tmp/geode-sdk.zip /tmp/geode-sdk-tmp
 
-          curl -L --retry 3 --fail \
+          curl -fsSL --retry 3 \
             "https://github.com/geode-sdk/geode/archive/refs/heads/main.zip" \
             -o /tmp/geode-sdk.zip
 
@@ -158,6 +190,23 @@ jobs:
 
           echo "Geode SDK extracted:"
           ls -la geode/
+
+      - name: Install Geode SDK loader binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Installing Geode loader binaries..."
+
+          # Set the Geode SDK path so the CLI knows where to install binaries.
+          export GEODE_SDK="$(pwd)/geode"
+          echo "GEODE_SDK=$GEODE_SDK" >> "$GITHUB_ENV"
+
+          geode sdk install-binaries
+
+          echo "Loader binaries installed."
+          echo "Contents of geode/bin/:"
+          ls -lah geode/bin/ || echo "(no bin directory found)"
 
       - name: Ensure miniaudio header exists
         shell: bash
@@ -168,10 +217,9 @@ jobs:
 
           if [ ! -f src/libs/miniaudio.h ]; then
             echo "Downloading miniaudio.h from upstream..."
-            curl -L --retry 3 --fail \
+            curl -fsSL --retry 3 \
               "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h" \
               -o src/libs/miniaudio.h
-            echo "miniaudio.h downloaded."
           else
             echo "miniaudio.h already present."
           fi
@@ -183,15 +231,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Configuring for ABI: ${{ matrix.abi }}"
-          echo "NDK path: $NDK_ROOT"
-          echo "Toolchain: $NDK_ROOT/build/cmake/android.toolchain.cmake"
+          echo "Configuring for ABI : ${{ matrix.abi }}"
+          echo "NDK path            : $NDK_ROOT"
+          echo "Geode SDK path      : $GEODE_SDK"
 
           cmake -S . -B "build/${{ matrix.abi }}" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DANDROID_ABI="${{ matrix.abi }}" \
             -DANDROID_PLATFORM=android-23 \
             -DANDROID_STL=c++_shared \
+            -DGEODE_SDK="$GEODE_SDK" \
             -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake"
 
       - name: Build
@@ -213,7 +262,7 @@ jobs:
             \( -name "*.geode" -o -name "*.so" \) \
             -exec cp -v {} "artifacts/${{ matrix.abi }}/" \;
 
-          echo "Artifacts collected for ${{ matrix.abi }}:"
+          echo "Artifacts for ${{ matrix.abi }}:"
           ls -lah "artifacts/${{ matrix.abi }}/"
 
       - name: Upload artifacts
