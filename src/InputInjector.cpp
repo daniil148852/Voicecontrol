@@ -26,16 +26,35 @@ namespace voicecontrol {
 
     void InputInjector::pressButton() {
         if (!m_layer || m_buttonDown) return;
-        // handleButton(bool down, int button, bool isPlayer2)
-        // down = true (press), button = 1 (jump/primary), isPlayer2 = false (player 1)
-        m_layer->handleButton(true, 1, false);
+        
+        // Create a simulated touch/click at screen center
+        auto director = CCDirector::sharedDirector();
+        auto winSize = director->getWinSize();
+        CCPoint touchPoint = ccp(winSize.width / 2, winSize.height / 2);
+        
+        // Convert to GL coordinates
+        touchPoint = director->convertToGL(touchPoint);
+        
+        // Call the base game layer's button handling
+        // This is the path that touch input takes
+        static_cast<GJBaseGameLayer*>(m_layer)->handleButton(
+            true,    // down = true (press)
+            1,       // button = 1 (primary/jump)
+            false    // player1 = true (not player 2)
+        );
+        
         m_buttonDown = true;
     }
 
     void InputInjector::releaseButton() {
         if (!m_layer || !m_buttonDown) return;
-        // down = false (release), button = 1 (jump/primary), isPlayer2 = false (player 1)
-        m_layer->handleButton(false, 1, false);
+        
+        static_cast<GJBaseGameLayer*>(m_layer)->handleButton(
+            false,   // down = false (release)
+            1,       // button = 1 (primary/jump)
+            false    // player1 = true (not player 2)
+        );
+        
         m_buttonDown = false;
     }
 
