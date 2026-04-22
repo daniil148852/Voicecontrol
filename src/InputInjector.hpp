@@ -1,10 +1,13 @@
 #pragma once
 
 #include <Geode/Geode.hpp>
-
 #include <cstdint>
 
+// Forward-declare to avoid pulling in all of Geode from the header.
+class PlayLayer;
+
 namespace voicecontrol {
+
     class InputInjector {
     public:
         enum class State : uint8_t {
@@ -13,7 +16,8 @@ namespace voicecontrol {
             HELD,
             RELEASING
         };
-        void attach(GJBaseGameLayer* layer);
+
+        void attach(PlayLayer* layer);
         void detach();
 
         void update(float dt, float rms);
@@ -25,10 +29,11 @@ namespace voicecontrol {
         void pressButton();
         void releaseButton();
 
-        GJBaseGameLayer* m_layer = nullptr;
-        State m_state = State::IDLE;
-        float m_timeAbove = 0.0f;
-        float m_timeBelow = 0.0f;
-        bool m_buttonDown = false;
+        PlayLayer* m_layer    = nullptr;
+        State      m_state    = State::IDLE;
+        float      m_timeAbove = 0.0f;
+        float      m_timeBelow = 0.0f;
+        bool       m_buttonDown = false;
     };
-}
+
+} // namespace voicecontrol
