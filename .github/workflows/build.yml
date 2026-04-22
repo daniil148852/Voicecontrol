@@ -58,13 +58,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "::group::Available NDK packages"
-          sdkmanager --list 2>/dev/null \
-            | grep -oE 'ndk;[0-9]+(\.[0-9]+)+' \
-            | sort -Vu \
-            || true
-          echo "::endgroup::"
-
           NDK_PKG=""
 
           for candidate in \
@@ -159,6 +152,7 @@ jobs:
           CLI_BIN="$(find /tmp/geode-cli -type f -name 'geode' | head -n 1)"
           if [ -z "$CLI_BIN" ]; then
             echo "ERROR: geode binary not found after extracting CLI."
+            ls -lah /tmp/geode-cli/
             exit 1
           fi
 
@@ -175,38 +169,72 @@ jobs:
 
           if [ -d "geode" ] && [ -f "geode/CMakeLists.txt" ]; then
             echo "Geode SDK already present at ./geode"
-            exit 0
+          else
+            echo "Downloading Geode SDK..."
+            rm -rf /tmp/geode-sdk.zip /tmp/geode-sdk-tmp
+
+            curl -fsSL --retry 3 \
+              "https://github.com/geode-sdk/geode/archive/refs/heads/main.zip" \
+              -o /tmp/geode-sdk.zip
+
+            unzip -q /tmp/geode-sdk.zip -d /tmp/geode-sdk-tmp
+            mv /tmp/geode-sdk-tmp/geode-main geode
+
+            echo "Geode SDK extracted."
           fi
 
-          echo "Downloading Geode SDK..."
-          rm -rf /tmp/geode-sdk.zip /tmp/geode-sdk-tmp
-
-          curl -fsSL --retry 3 \
-            "https://github.com/geode-sdk/geode/archive/refs/heads/main.zip" \
-            -o /tmp/geode-sdk.zip
-
-          unzip -q /tmp/geode-sdk.zip -d /tmp/geode-sdk-tmp
-          mv /tmp/geode-sdk-tmp/geode-main geode
-
-          echo "Geode SDK extracted:"
-          ls -la geode/
+          GEODE_SDK="$(pwd)/geode"
+          echo "GEODE_SDK=$GEODE_SDK" >> "$GITHUB_ENV"
+          echo "Geode SDK path: $GEODE_SDK"
 
       - name: Install Geode SDK loader binaries
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Installing Geode loader binaries..."
+          echo "Setting up Geode CLI profile for CI..."
 
-          # Set the Geode SDK path so the CLI knows where to install binaries.
-          export GEODE_SDK="$(pwd)/geode"
-          echo "GEODE_SDK=$GEODE_SDK" >> "$GITHUB_ENV"
+          # The CLI needs a config directory and a profile entry
+          # pointing to a valid-looking GD install path.
+          # In CI we create a fake GD directory so the CLI accepts it.
 
+          FAKE_GD_DIR="/tmp/fake-gd"
+          mkdir -p "$FAKE_GD_DIR"
+
+          # Touch a fake GD executable so the CLI path check passes.
+          touch "$FAKE_GD_DIR/GeometryDash"
+          chmod +x "$FAKE_GD_DIR/GeometryDash"
+
+          # Geode CLI stores its config in ~/.config/geode on Linux.
+          GEODE_CONFIG_DIR="$HOME/.config/geode"
+          mkdir -p "$GEODE_CONFIG_DIR"
+
+          # Write a minimal config.json that gives the CLI a named profile.
+          cat > "$GEODE_CONFIG_DIR/config.json" <<EOF
+          {
+            "current": "ci",
+            "profiles": [
+              {
+                "name": "ci",
+                "gd-path": "$FAKE_GD_DIR",
+                "geode-path": "$FAKE_GD_DIR/geode"
+              }
+            ]
+          }
+          EOF
+
+          mkdir -p "$FAKE_GD_DIR/geode"
+
+          echo "Geode CLI config written:"
+          cat "$GEODE_CONFIG_DIR/config.json"
+
+          echo "Installing Geode loader binaries into SDK..."
+          export GEODE_SDK="$GEODE_SDK"
           geode sdk install-binaries
 
           echo "Loader binaries installed."
-          echo "Contents of geode/bin/:"
-          ls -lah geode/bin/ || echo "(no bin directory found)"
+          echo "Contents of geode/bin/ (if present):"
+          ls -lah "$GEODE_SDK/bin/" 2>/dev/null || echo "(no bin directory yet)"
 
       - name: Ensure miniaudio header exists
         shell: bash
@@ -216,7 +244,7 @@ jobs:
           mkdir -p src/libs
 
           if [ ! -f src/libs/miniaudio.h ]; then
-            echo "Downloading miniaudio.h from upstream..."
+            echo "Downloading miniaudio.h..."
             curl -fsSL --retry 3 \
               "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h" \
               -o src/libs/miniaudio.h
