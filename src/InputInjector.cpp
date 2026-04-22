@@ -26,13 +26,17 @@ namespace voicecontrol {
 
     void InputInjector::pressButton() {
         if (!m_layer || m_buttonDown) return;
-        m_layer->pushButton(PlayerButton::Jump, true);
+        if (m_layer->m_player1) {
+            m_layer->m_player1->pushButton(PlayerButton::Jump);
+        }
         m_buttonDown = true;
     }
 
     void InputInjector::releaseButton() {
         if (!m_layer || !m_buttonDown) return;
-        m_layer->releaseButton(PlayerButton::Jump, true);
+        if (m_layer->m_player1) {
+            m_layer->m_player1->releaseButton(PlayerButton::Jump);
+        }
         m_buttonDown = false;
     }
 
@@ -55,8 +59,8 @@ namespace voicecontrol {
             return;
         }
 
-        const float threshold      = std::max(0.0001f, mod->getSettingValue<float>("sensitivity"));
-        const float pressDebounce  = static_cast<float>(mod->getSettingValue<int>("press_debounce_ms"))   / 1000.0f;
+        const float threshold       = std::max(0.0001f, mod->getSettingValue<float>("sensitivity"));
+        const float pressDebounce   = static_cast<float>(mod->getSettingValue<int>("press_debounce_ms"))   / 1000.0f;
         const float releaseDebounce = static_cast<float>(mod->getSettingValue<int>("release_debounce_ms")) / 1000.0f;
 
         const bool above = rms > threshold;
