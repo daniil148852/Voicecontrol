@@ -1,26 +1,29 @@
 cmake_minimum_required(VERSION 3.21)
-project(voicecontrol)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_subdirectory(geode)
+project(UltraHackPack VERSION 1.0.0)
 
-file(GLOB_RECURSE SOURCES src/*.cpp)
+# Подключаем Geode SDK
+add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
+
+# ========================================
+# Собираем ВСЕ .cpp файлы рекурсивно
+# включая src/hooks/, src/utils/ и т.д.
+# ========================================
+file(GLOB_RECURSE SOURCES
+    src/*.cpp
+    src/**/*.cpp
+)
+
+# Создаём библиотеку со всеми исходниками
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 
-target_include_directories(${PROJECT_NAME} PRIVATE src/libs)
-
-target_link_libraries(${PROJECT_NAME}
-    geode-sdk
-    aaudio
-    OpenSLES
-    log
+# Добавляем src/ как директорию для #include
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-    MA_ENABLE_AAUDIO
-    MA_ENABLE_OPENSL
-)
-
+# Настраиваем как Geode мод
 setup_geode_mod(${PROJECT_NAME})
