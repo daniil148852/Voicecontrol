@@ -10,20 +10,8 @@
 #include <sstream>
 #include <string>
 #include <functional>
-#include <jni.h>
 
 using namespace geode::prelude;
-
-// ------------------------------------------------------------------ JVM pointer (global scope)
-// Must be at global scope so JNI_OnLoad and AudioCapture.cpp can both access it.
-JavaVM* g_voicecontrol_jvm = nullptr;
-
-extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
-    g_voicecontrol_jvm = vm;
-    return JNI_VERSION_1_6;
-}
-
-// ------------------------------------------------------------------ mod implementation
 
 namespace voicecontrol {
 
@@ -157,7 +145,6 @@ namespace voicecontrol {
     static void openTestPopup() {
         ensureAudioRunning();
 
-        // 6-arg FLAlertLayer::create overload
         auto* popup = FLAlertLayer::create(
             nullptr,
             "VoiceControl",
