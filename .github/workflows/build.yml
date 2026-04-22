@@ -13,9 +13,6 @@ on:
 permissions:
   contents: write
 
-env:
-  GEODE_SDK_URL: "https://github.com/geode-sdk/geode/archive/refs/heads/main.zip"
-
 jobs:
   build:
     name: Build Android ${{ matrix.abi }}
@@ -33,60 +30,148 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - name: Setup Android NDK
-        id: setup_ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r29d
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Install Ninja
+      - name: Install Android SDK packages and NDK
         shell: bash
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ninja-build unzip
+          set -euo pipefail
 
-      - name: Download and extract Geode SDK
+          yes | sdkmanager --licenses >/dev/null
+
+          # Base Android packages required for cross-compiling.
+          sdkmanager "platform-tools" "platforms;android-23"
+
+          echo "::group::Available NDK packages"
+          sdkmanager --list | grep -oE 'ndk;[0-9]+(\.[0-9]+)+' | sort -Vu || true
+          echo "::endgroup::"
+
+          detect_latest_ndk() {
+            sdkmanager --list 2>/dev/null | grep -oE 'ndk;[0-9]+(\.[0-9]+)+' | sort -Vu | tail -n 1
+          }
+
+          NDK_PKG="$(detect_latest_ndk || true)"
+
+          if [ -n "${NDK_PKG:-}" ]; then
+            echo "Trying detected NDK package: $NDK_PKG"
+            if ! sdkmanager "$NDK_PKG"; then
+              echo "Detected NDK package failed to install, falling back to known versions."
+              NDK_PKG=""
+            fi
+          fi
+
+          if [ -z "${NDK_PKG:-}" ]; then
+            for candidate in \
+              "ndk;29.0.13113456" \
+              "ndk;28.0.13004108" \
+              "ndk;28.0.12674087" \
+              "ndk;27.2.12479018"
+            do
+              echo "Trying fallback NDK package: $candidate"
+              if sdkmanager "$candidate"; then
+                NDK_PKG="$candidate"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "${NDK_PKG:-}" ]; then
+            echo "Failed to install any supported Android NDK package."
+            exit 1
+          fi
+
+          NDK_ROOT="$(ls -d "$ANDROID_SDK_ROOT"/ndk/* | sort -V | tail -n 1)"
+          if [ -z "${NDK_ROOT:-}" ] || [ ! -d "$NDK_ROOT" ]; then
+            echo "Could not locate installed NDK directory."
+            exit 1
+          fi
+
+          echo "NDK_ROOT=$NDK_ROOT" >> "$GITHUB_ENV"
+          echo "Using NDK at: $NDK_ROOT"
+
+          CLANGXX="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
+          if [ ! -x "$CLANGXX" ]; then
+            echo "clang++ not found in NDK at $CLANGXX"
+            exit 1
+          fi
+
+          "$CLANGXX" --version
+
+          CLANG_MAJOR="$("$CLANGXX" --version | head -n1 | sed -E 's/.*version ([0-9]+)\..*/\1/')"
+          if [ -z "${CLANG_MAJOR:-}" ]; then
+            echo "Could not parse Clang version."
+            exit 1
+          fi
+
+          if [ "$CLANG_MAJOR" -lt 19 ]; then
+            echo "Installed NDK Clang is too old ($CLANG_MAJOR). Geode requires Clang 19 or newer."
+            exit 1
+          fi
+
+      - name: Download Geode SDK if missing
         shell: bash
         run: |
-          echo "Downloading Geode SDK from $GEODE_SDK_URL ..."
-          curl -L --retry 3 -o /tmp/geode-sdk.zip "$GEODE_SDK_URL"
-          unzip -q /tmp/geode-sdk.zip -d /tmp/geode-sdk-tmp
-          mv /tmp/geode-sdk-tmp/geode-main geode
-          echo "Geode SDK extracted to $(pwd)/geode"
-          ls -la geode/
+          set -euo pipefail
+
+          if [ -d "geode" ] && [ -f "geode/CMakeLists.txt" ]; then
+            echo "Geode SDK already present."
+            exit 0
+          fi
+
+          echo "Downloading Geode SDK..."
+          rm -rf geode /tmp/geode-sdk /tmp/geode-sdk.zip
+          curl -L --retry 3 \
+            https://github.com/geode-sdk/geode/archive/refs/heads/main.zip \
+            -o /tmp/geode-sdk.zip
+          unzip -q /tmp/geode-sdk.zip -d /tmp/geode-sdk
+          mv /tmp/geode-sdk/geode-main geode
+
+          echo "Geode SDK ready:"
+          ls -la geode
 
       - name: Ensure miniaudio header exists
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p src/libs
           if [ ! -f src/libs/miniaudio.h ]; then
-            echo "miniaudio.h not found, downloading from upstream..."
+            echo "Downloading miniaudio.h..."
             curl -L --retry 3 \
               https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h \
               -o src/libs/miniaudio.h
           fi
 
+          test -f src/libs/miniaudio.h
+
       - name: Configure CMake
         shell: bash
         run: |
+          set -euo pipefail
+
           cmake -S . -B build/${{ matrix.abi }} -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=android-23 \
             -DANDROID_STL=c++_shared \
-            -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup_ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake"
 
       - name: Build
         shell: bash
         run: |
+          set -euo pipefail
           cmake --build build/${{ matrix.abi }} --config Release --parallel "$(nproc)"
 
       - name: Collect artifacts
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts/${{ matrix.abi }}
+
           find build/${{ matrix.abi }} -type f \( -name "*.geode" -o -name "*.so" \) -exec cp -v {} artifacts/${{ matrix.abi }}/ \;
+
           echo "Artifacts for ${{ matrix.abi }}:"
           ls -lah artifacts/${{ matrix.abi }}
 
