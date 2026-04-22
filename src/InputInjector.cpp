@@ -26,17 +26,16 @@ namespace voicecontrol {
 
     void InputInjector::pressButton() {
         if (!m_layer || m_buttonDown) return;
-        if (m_layer->m_player1) {
-            m_layer->m_player1->pushButton(PlayerButton::Jump);
-        }
+        // handleButton(bool down, int button, bool isPlayer2)
+        // down = true (press), button = 1 (jump/primary), isPlayer2 = false (player 1)
+        m_layer->handleButton(true, 1, false);
         m_buttonDown = true;
     }
 
     void InputInjector::releaseButton() {
         if (!m_layer || !m_buttonDown) return;
-        if (m_layer->m_player1) {
-            m_layer->m_player1->releaseButton(PlayerButton::Jump);
-        }
+        // down = false (release), button = 1 (jump/primary), isPlayer2 = false (player 1)
+        m_layer->handleButton(false, 1, false);
         m_buttonDown = false;
     }
 
