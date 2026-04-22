@@ -38,7 +38,7 @@ jobs:
         id: setup_ndk
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26d
+          ndk-version: r28d
 
       - name: Install Ninja
         shell: bash
