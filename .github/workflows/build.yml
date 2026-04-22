@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          yes | sdkmanager --licenses >/dev/null
+          yes | sdkmanager --licenses >/dev/null || [ $? -eq 141 ]
 
           # Base Android packages required for cross-compiling.
           sdkmanager "platform-tools" "platforms;android-23"
