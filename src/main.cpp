@@ -14,8 +14,8 @@
 
 using namespace geode::prelude;
 
-// ------------------------------------------------------------------ JVM pointer
-// Exposed here; AudioCapture.cpp uses it via extern.
+// ------------------------------------------------------------------ JVM pointer (global scope)
+// Must be at global scope so JNI_OnLoad and AudioCapture.cpp can both access it.
 JavaVM* g_voicecontrol_jvm = nullptr;
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
@@ -23,11 +23,13 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     return JNI_VERSION_1_6;
 }
 
+// ------------------------------------------------------------------ mod implementation
+
 namespace voicecontrol {
 
-    static AudioCapture   g_audio;
-    static InputInjector  g_injector;
-    static VolumeIndicator* g_indicator = nullptr;
+    static AudioCapture      g_audio;
+    static InputInjector     g_injector;
+    static VolumeIndicator*  g_indicator = nullptr;
     static std::atomic<bool> g_hardDisabled { false };
 
     static constexpr int kIndicatorTag = 0x5653;
