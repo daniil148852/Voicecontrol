@@ -177,26 +177,27 @@ namespace voicecontrol {
         }
 
         void update(float dt) {
-            PlayLayer::update(dt);
+            // CRITICAL: Process input BEFORE physics update
+            if (Mod::get()->getSettingValue<bool>("enabled")) {
+                if (!g_audio.isAvailable()) ensureAudioRunning();
 
-            if (!Mod::get()->getSettingValue<bool>("enabled")) {
+                g_injector.attach(this);
+                g_injector.update(dt, g_currentRMS.load(std::memory_order_relaxed));
+
+                if (Mod::get()->getSettingValue<bool>("show_volume_indicator")) {
+                    if (!g_indicator || !g_indicator->getParent())
+                        attachIndicatorToLayer(this);
+                } else {
+                    removeIndicator();
+                }
+            } else {
                 g_injector.forceRelease();
                 removeIndicator();
                 stopAudio();
-                return;
             }
 
-            if (!g_audio.isAvailable()) ensureAudioRunning();
-
-            g_injector.attach(this);
-            g_injector.update(dt, g_currentRMS.load(std::memory_order_relaxed));
-
-            if (Mod::get()->getSettingValue<bool>("show_volume_indicator")) {
-                if (!g_indicator || !g_indicator->getParent())
-                    attachIndicatorToLayer(this);
-            } else {
-                removeIndicator();
-            }
+            // Now let the game process the physics with our injected state
+            PlayLayer::update(dt);
         }
 
         void onQuit() {
