@@ -27,21 +27,99 @@ namespace voicecontrol {
     void InputInjector::pressButton() {
         if (!m_layer || m_buttonDown) return;
         
-        // Create a simulated touch/click at screen center
-        auto director = CCDirector::sharedDirector();
-        auto winSize = director->getWinSize();
-        CCPoint touchPoint = ccp(winSize.width / 2, winSize.height / 2);
+        auto* player = m_layer->m_player1;
+        if (!player) return;
+
+        // ================================================================
+        // NUCLEAR OPTION: Direct physics manipulation
+        // ================================================================
         
-        // Convert to GL coordinates
-        touchPoint = director->convertToGL(touchPoint);
+        log::info("VoiceControl: NUCLEAR PRESS - triggering jump");
         
-        // Call the base game layer's button handling
-        // This is the path that touch input takes
-        static_cast<GJBaseGameLayer*>(m_layer)->handleButton(
-            true,    // down = true (press)
-            1,       // button = 1 (primary/jump)
-            false    // player1 = true (not player 2)
-        );
+        // Set player internal state flags
+        player->m_isHolding = true;
+        player->m_hasJustHeld = true;
+        
+        // Get current game mode
+        bool isShip     = player->m_isShip;
+        bool isBall     = player->m_isBall;
+        bool isUfo      = player->m_isUfo;
+        bool isWave     = player->m_isWave;
+        bool isRobot    = player->m_isRobot;
+        bool isSpider   = player->m_isSpider;
+        bool isSwing    = player->m_isSwing;
+        bool isCube     = !isShip && !isBall && !isUfo && !isWave && !isRobot && !isSpider && !isSwing;
+        
+        // CUBE MODE
+        if (isCube) {
+            if (player->m_isOnGround) {
+                log::info("VoiceControl: Cube jump from ground");
+                player->m_yVelocity = 11.180f;  // Standard jump velocity
+                player->m_isOnGround = false;
+                player->m_hasJustJumped = true;
+                
+                // Play jump sound
+                if (auto* audioEngine = FMODAudioEngine::sharedEngine()) {
+                    audioEngine->playEffect("playSound_01.ogg");
+                }
+            } else {
+                log::info("VoiceControl: Cube in air - cannot jump");
+            }
+        }
+        
+        // SHIP MODE
+        else if (isShip) {
+            log::info("VoiceControl: Ship thrust");
+            player->m_yVelocity = 5.77f;  // Ship upward thrust
+            player->m_isHolding2 = true;
+        }
+        
+        // BALL MODE
+        else if (isBall) {
+            log::info("VoiceControl: Ball gravity toggle");
+            player->m_yVelocity = player->m_yVelocity * -1.0f;
+            player->flipGravity(true, false);
+        }
+        
+        // UFO MODE
+        else if (isUfo) {
+            log::info("VoiceControl: UFO boost");
+            float boostPower = player->m_isUpsideDown ? -10.5f : 10.5f;
+            player->m_yVelocity = boostPower;
+            
+            // Play UFO sound
+            if (auto* audioEngine = FMODAudioEngine::sharedEngine()) {
+                audioEngine->playEffect("playSound_01.ogg");
+            }
+        }
+        
+        // WAVE MODE
+        else if (isWave) {
+            log::info("VoiceControl: Wave up");
+            player->m_waveTrail->m_isSolid = true;
+        }
+        
+        // ROBOT MODE
+        else if (isRobot) {
+            if (player->m_isOnGround) {
+                log::info("VoiceControl: Robot jump");
+                player->m_yVelocity = 11.180f;
+                player->m_isOnGround = false;
+                player->m_hasJustJumped = true;
+            }
+        }
+        
+        // SPIDER MODE
+        else if (isSpider) {
+            log::info("VoiceControl: Spider teleport");
+            player->toggleGravity();
+        }
+        
+        // SWING MODE
+        else if (isSwing) {
+            log::info("VoiceControl: Swing direction change");
+            player->m_isHolding2 = true;
+        }
         
         m_buttonDown = true;
     }
@@ -49,17 +127,36 @@ namespace voicecontrol {
     void InputInjector::releaseButton() {
         if (!m_layer || !m_buttonDown) return;
         
-        static_cast<GJBaseGameLayer*>(m_layer)->handleButton(
-            false,   // down = false (release)
-            1,       // button = 1 (primary/jump)
-            false    // player1 = true (not player 2)
-        );
+        auto* player = m_layer->m_player1;
+        if (!player) return;
+
+        log::info("VoiceControl: NUCLEAR RELEASE");
+        
+        // Clear holding state
+        player->m_isHolding = false;
+        player->m_hasJustHeld = false;
+        player->m_isHolding2 = false;
+        
+        // Ship/Wave specific release logic
+        if (player->m_isShip) {
+            log::info("VoiceControl: Ship release - gravity takes over");
+            // Ship will start falling
+        }
+        
+        if (player->m_isWave) {
+            log::info("VoiceControl: Wave release - neutral");
+            if (player->m_waveTrail) {
+                player->m_waveTrail->m_isSolid = false;
+            }
+        }
         
         m_buttonDown = false;
     }
 
     void InputInjector::forceRelease() {
-        if (m_buttonDown) releaseButton();
+        if (m_buttonDown) {
+            releaseButton();
+        }
         m_state     = State::IDLE;
         m_timeAbove = 0.0f;
         m_timeBelow = 0.0f;
@@ -87,8 +184,9 @@ namespace voicecontrol {
         else       { m_timeBelow += dt; m_timeAbove  = 0.0f; }
 
         // Dead player: force release immediately.
-        if (m_layer->m_player1 && m_layer->m_player1->m_isDead)
+        if (m_layer->m_player1 && m_layer->m_player1->m_isDead) {
             m_state = State::RELEASING;
+        }
 
         switch (m_state) {
             case State::IDLE:
@@ -107,8 +205,9 @@ namespace voicecontrol {
                 break;
 
             case State::HELD:
-                if (!above && m_timeBelow >= releaseDebounce)
+                if (!above && m_timeBelow >= releaseDebounce) {
                     m_state = State::RELEASING;
+                }
                 break;
 
             case State::RELEASING:
